@@ -34,7 +34,7 @@ except Exception as e:
 # เชื่อมต่อกับระบบ AI
 if api_key:
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 else:
     st.error("🔒 ระบบล็อกอยู่: เนื่องจากยังไม่ได้ตั้งค่า API Key หรือตั้งค่าไม่ถูกต้อง (กรุณาดูวิธีแก้ไขในเมนู Debug ด้านล่าง)")
 
