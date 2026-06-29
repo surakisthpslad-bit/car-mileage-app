@@ -4,28 +4,50 @@ from PIL import Image
 import json
 from datetime import datetime
 
-# 1. ดึง API Key จากระบบหลังบ้านของ Streamlit (เพื่อความปลอดภัย)
-# หากรันบนเครื่องตัวเองให้เปลี่ยนเป็น genai.configure(api_key="YOUR_API_KEY")
-try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-except:
-    st.warning("⚠️ ยังไม่ได้ตั้งค่า API Key ใน Streamlit Secrets")
-
-# ใช้ Gemini 1.5 Flash ซึ่งเร็วและเหมาะกับรูปภาพ
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-st.set_page_config(page_title="ระบบบันทึกไมล์รถยนต์", page_icon="🚗")
+st.set_page_config(page_title="ระบบบันทึกไมล์รถยนต์ (มีระบบ Debug)", page_icon="🚗")
 st.title("🚗 อัปโหลดรูปหน้าปัดรถยนต์")
 st.write("ระบบจะอ่านวันที่, ระยะทางของวัน (Trip), และระยะทางรวม (ODO) ให้อัตโนมัติ")
 
+# สร้างตัวแปรส่วนกลางสำหรับเก็บสถานะการตรวจสอบ (Debug)
+if 'debug_info' not in st.session_state:
+    st.session_state.debug_info = {
+        "api_key_status": "ยังไม่ได้ตรวจสอบ",
+        "raw_response": "ยังไม่มีการส่งรูปภาพ",
+        "error_message": "ไม่มีข้อผิดพลาด"
+    }
+
+# 1. ตรวจสอบการโหลด API Key จากระบบ Secrets ของ Streamlit
+api_key = ""
+try:
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        if api_key == "วาง_API_KEY_ของคุณตรงนี้" or api_key == "":
+            st.session_state.debug_info["api_key_status"] = "❌ พบ Key แต่ค่าว่างเปล่า หรือยังไม่ได้เปลี่ยนเป็น Key จริง"
+            api_key = ""
+        else:
+            st.session_state.debug_info["api_key_status"] = "✅ พบบัญชี API Key ในระบบพร้อมใช้งานแล้ว"
+    else:
+        st.session_state.debug_info["api_key_status"] = "❌ ไม่พบตัวแปรชื่อ GEMINI_API_KEY ใน Streamlit Secrets"
+except Exception as e:
+    st.session_state.debug_info["api_key_status"] = f"❌ เกิดข้อผิดพลาดเกี่ยวกับตัวระบบคลาวด์: {str(e)}"
+
+# เชื่อมต่อกับระบบ AI
+if api_key:
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    st.error("🔒 ระบบล็อกอยู่: เนื่องจากยังไม่ได้ตั้งค่า API Key หรือตั้งค่าไม่ถูกต้อง (กรุณาดูวิธีแก้ไขในเมนู Debug ด้านล่าง)")
+
 uploaded_file = st.file_uploader("📷 ถ่ายรูปหรืออัปโหลดรูปหน้าปัดรถ", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
+# ค่าเริ่มต้นหากระบบตรวจจับไม่ได้
+data = {"date": "Not Found", "trip": 0, "odo": 0}
+
+if uploaded_file is not None and api_key:
     image = Image.open(uploaded_file)
     st.image(image, caption='รูปภาพที่อัปโหลด', use_column_width=True)
     
     with st.spinner('🤖 AI กำลังวิเคราะห์หน้าปัดรถ...'):
-        # 2. คำสั่ง (Prompt) บังคับให้ AI ตอบเป็น JSON
         prompt = """
         Analyze this car dashboard image. Extract the following 3 pieces of information:
         1. Date visible on the dashboard (if any). If not visible, return "Not Found".
@@ -36,20 +58,29 @@ if uploaded_file is not None:
         Format example: {"date": "15/10/2023", "trip": 45.2, "odo": 150000}
         """
         
+        # รีเซ็ตค่าล็อกสำหรับการส่งภาพครั้งใหม่
+        st.session_state.debug_info["raw_response"] = "กำลังรอผลลัพธ์จาก Google API..."
+        st.session_state.debug_info["error_message"] = "ไม่มีข้อผิดพลาด"
+        
         try:
             response = model.generate_content([prompt, image])
-            # ทำความสะอาดข้อความเผื่อ AI ส่ง markdown ```json มาด้วย
+            
+            # 🎯 ดักจับ: บันทึกค่าดิบที่ AI ส่งกลับมาจริงๆ
+            st.session_state.debug_info["raw_response"] = response.text
+            
+            # ทำความสะอาดข้อความส่วนเกินเพื่อนำไปแปลงเป็น JSON
             raw_text = response.text.strip().replace("```json", "").replace("```", "")
             data = json.loads(raw_text)
+            st.success("✨ AI วิเคราะห์เสร็จสิ้น!")
+            
         except Exception as e:
-            st.error(f"เกิดข้อผิดพลาดในการอ่านภาพ: กรุณาลองถ่ายรูปให้ชัดเจนขึ้น")
-            data = {"date": "Not Found", "trip": 0, "odo": 0}
+            # 🎯 ดักจับ: บันทึกข้อผิดพลาดของระบบโค้ด
+            st.session_state.debug_info["error_message"] = str(e)
+            st.error("⚠️ ไม่สามารถสกัดข้อมูลจากภาพได้สำเร็จ กรุณาเลื่อนลงไปตรวจสอบสาเหตุที่ 'กล่องข้อมูล Debug' ด้านล่าง")
 
-    st.success("✨ วิเคราะห์สำเร็จ! กรุณาตรวจสอบและแก้ไขข้อมูลก่อนบันทึก")
-    
-    # 3. สร้างฟอร์มให้ผู้ใช้ตรวจสอบความถูกต้อง
+    # แสดงฟอร์มตรวจสอบข้อมูล (จะทำงานแม้ระบบจะเอ๋อ เพื่อให้กรอกเองมือได้)
+    st.write("---")
     with st.form("data_form"):
-        # วันที่: หาก AI หาไม่เจอ ให้ใช้วันที่ปัจจุบันเป็นค่าเริ่มต้น
         default_date = datetime.today().strftime('%Y-%m-%d')
         display_date = default_date if data.get('date') == "Not Found" else data.get('date', default_date)
         
@@ -58,8 +89,27 @@ if uploaded_file is not None:
         input_odo = st.number_input("🔄 ระยะทางรวมทั้งหมด (ODO)", value=int(data.get('odo', 0)), step=1)
         
         submitted = st.form_submit_button("💾 ยืนยันและบันทึกข้อมูล")
-        
         if submitted:
-            # 4. ส่วนนี้คือจุดที่คุณสามารถนำข้อมูลไปต่อยอด เช่น ส่งเข้า Google Sheets
             st.balloons()
-            st.info(f"✅ บันทึกข้อมูลเรียบร้อย!\n\nวันที่: {input_date}\nระยะทางวันนี้: {input_trip} กม.\nระยะทางรวม: {input_odo} กม.")
+            st.success(f"บันทึกข้อมูลสำเร็จ! (ระยะทางรวม {input_odo} กม.)")
+
+# =======================================================
+# 🛠️ โซนระบบตรวจสอบข้อผิดพลาด (DEVELOPER DEBUG LOGS)
+# =======================================================
+st.write("---")
+with st.expander("🛠️ กล่องเครื่องมือตรวจสอบข้อผิดพลาดหลังบ้าน (Debug Logs)สำหรับผู้พัฒนา"):
+    st.info("ใช้ส่วนนี้เพื่อตรวจสอบว่าระบบของคุณเชื่อมต่อกับ Google API ได้สมบูรณ์หรือไม่")
+    
+    st.subheader("1. ตรวจสอบการเปิดใช้งาน API Key")
+    st.code(st.session_state.debug_info["api_key_status"])
+    
+    st.subheader("2. ค่าดิบที่ Google API ส่งกลับมา (Raw Response)")
+    st.write("ดูว่าจริงๆ แล้ว AI อ่านได้อะไร และทำไมระบบถึงแปลงค่าเป็นตัวเลขไม่ได้:")
+    st.code(st.session_state.debug_info["raw_response"])
+    
+    st.subheader("3. ข้อความแจ้งเตือนความเสียหายของโค้ด (Error Message)")
+    if st.session_state.debug_info["error_message"] != "ไม่มีข้อผิดพลาด":
+        st.write("🔴 โค้ดหยุดทำงานเนื่องจากเหตุผลต่อไปนี้:")
+        st.code(st.session_state.debug_info["error_message"], language="python")
+    else:
+        st.code("ไม่มีข้อผิดพลาดในระบบควบคุม")
